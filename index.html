@@ -54,6 +54,14 @@
 .type-公共课{background:#fef3c7;color:#92400e}
 .type-英语{background:#f0fdf4;color:#166534}
 .empty{padding:20px;border:1px dashed #cbd5e1;border-radius:18px;color:var(--muted);text-align:center}
+.now-next{background:linear-gradient(135deg,#4f46e5,#7c3aed);color:#fff;border-radius:18px;padding:16px;margin-bottom:14px}
+.now-next .nn-label{font-size:11px;opacity:.8;letter-spacing:1px;text-transform:uppercase;margin-bottom:6px}
+.now-next .nn-course{font-size:18px;font-weight:800;margin-bottom:4px}
+.now-next .nn-meta{font-size:13px;opacity:.9;line-height:1.5}
+.now-next .nn-time{font-size:12px;opacity:.75;margin-top:6px}
+.now-next.now{background:linear-gradient(135deg,#059669,#10b981)}
+.now-next.next{background:linear-gradient(135deg,#d97706,#f59e0b)}
+.now-next.done{background:linear-gradient(135deg,#6b7280,#9ca3af)}
 .footer{margin-top:14px;font-size:12px;color:var(--muted);line-height:1.7}
 .switch{height:42px;border:0;border-radius:14px;background:#111827;color:white;padding:0 14px;cursor:pointer;font-size:14px;transition:all .15s}
 .switch.on{background:var(--primary)}
@@ -83,7 +91,7 @@
     <div class="stat"><b id="s1">0</b><span>本周课程块</span></div><div class="stat"><b id="s2">0</b><span>本周上课天数</span></div><div class="stat"><b id="s3">0</b><span>专业课块</span></div><div class="stat"><b id="s4">0</b><span>最晚下课</span></div>
   </div>
   <div class="grid">
-    <aside class="today"><h2>今日/筛选摘要</h2><div id="summary"></div><div class="footer">提示：第1-5周、第6-13周变化最大。切换周次后，冲突课程会自动替换。</div></aside>
+    <aside class="today"><h2>📋 实时提醒</h2><div id="nowNext"></div><div id="summary"></div><div class="footer">提示：第1-5周、第6-13周变化最大。切换周次后，冲突课程会自动替换。</div></aside>
     <main class="weekview"><h2 id="viewTitle">本周课表</h2><div id="schedule"></div></main>
   </div>
 </div>
@@ -172,6 +180,7 @@ const $s1=document.getElementById('s1'),$s2=document.getElementById('s2'),$s3=do
 const $viewTitle=document.getElementById('viewTitle');
 const $schedule=document.getElementById('schedule');
 const $summary=document.getElementById('summary');
+const $nowNext=document.getElementById('nowNext');
 
 // ── 初始化 week 下拉 ──
 function formatDate(d){ return (d.getMonth()+1)+'/'+d.getDate(); }
@@ -248,6 +257,60 @@ function courseHTML(c,w){
   </div>`;
 }
 
+// ── 时间解析 & 实时提醒 ──
+function parseTime(t){const [h,m]=t.split(':').map(Number);return h*60+m;}
+function parseTimeRange(tr){const [s,e]=tr.split('-');return [parseTime(s),parseTime(e)];}
+
+function findNowNext(){
+  const now=new Date();
+  const nowMin=now.getHours()*60+now.getMinutes();
+  const today=todayDayName();
+  const w=calcCurrentWeek().week;
+  if(w<1||w>18) return {state:'break', msg:'学期未开始或已结束'};
+  if(today==='周六'||today==='周日') return {state:'weekend', msg:'周末没有课程 ☀️'};
+
+  // 今天 + 本周的所有课程，按开始时间排序
+  const todayCourses=courses.filter(c=>c.day===today&&inWeek(c,w));
+  if(!todayCourses.length) return {state:'empty', msg:'今天没有课程 🎉'};
+
+  // 解析每门课的时间区间
+  const withTime=todayCourses.map(c=>{
+    const [s,e]=parseTimeRange(c.time);
+    return {...c, start:s, end:e};
+  }).sort((a,b)=>a.start-b.start);
+
+  // 查找正在进行的课
+  const ongoing=withTime.find(c=>nowMin>=c.start&&nowMin<c.end);
+  if(ongoing){
+    const remain=ongoing.end-nowMin;
+    const remainStr=remain>=60?`还有 ${Math.floor(remain/60)}h${remain%60}m 下课`:`还有 ${remain} 分钟下课`;
+    return {
+      state:'now',
+      course:ongoing,
+      msg:`正在上课 · ${ongoing.cn}`,
+      meta:`${ongoing.sec}节 ${ongoing.time}｜${ongoing.room}`,
+      extra:remainStr
+    };
+  }
+
+  // 查找下一节课
+  const next=withTime.find(c=>c.start>nowMin);
+  if(next){
+    const wait=next.start-nowMin;
+    const waitStr=wait>=60?`${Math.floor(wait/60)}h${wait%60}m 后开始`:`${wait} 分钟后开始`;
+    return {
+      state:'next',
+      course:next,
+      msg:`即将上课 · ${next.cn}`,
+      meta:`${next.sec}节 ${next.time}｜${next.room}`,
+      extra:waitStr
+    };
+  }
+
+  // 今天所有课都结束了
+  return {state:'done', msg:'今天课程已结束 ✅'};
+}
+
 // ── 渲染 ──
 function render(){
   const w=currentWeek;
@@ -274,11 +337,50 @@ function render(){
   });
   $schedule.innerHTML=html||'<div class="empty">这个筛选条件下没有课程。</div>';
 
+  // ── 实时提醒卡片 ──
+  const nn=findNowNext();
+  const nnCls=nn.state==='now'?'now':(nn.state==='next'?'next':'done');
+  let nnHTML='';
+  if(nn.state==='now'||nn.state==='next'){
+    nnHTML=`<div class="now-next ${nnCls}">
+      <div class="nn-label">${nn.state==='now'?'🔴 正在进行':'🟡 即将开始'}</div>
+      <div class="nn-course">${nn.course.cn}</div>
+      <div class="nn-meta">${nn.meta}</div>
+      <div class="nn-time">${nn.extra}</div>
+    </div>`;
+  }else{
+    nnHTML=`<div class="now-next ${nnCls}">
+      <div class="nn-label">${nn.state==='weekend'?'🌴 周末':'📋 提醒'}</div>
+      <div class="nn-course" style="font-size:15px">${nn.msg}</div>
+    </div>`;
+  }
+  $nowNext.innerHTML=nnHTML;
+
   const sum=list.slice(0,5).map(c=>`<div class="next-card"><strong>${c.day} ${c.sec}节 · ${c.cn}</strong><span class="muted">${c.time}｜${c.room}｜${c.weeks[0]}-${c.weeks[1]}周</span></div>`).join('');
-  $summary.innerHTML=sum||'<div class="empty">暂无课程</div>';
+  $summary.innerHTML='<div style="font-size:13px;color:var(--muted);margin-bottom:8px">筛选结果预览</div>'+(sum||'<div class="empty">暂无课程</div>');
 }
 
 render();
+// 每 60 秒自动刷新实时提醒
+setInterval(function(){
+  const nn=findNowNext();
+  const nnCls=nn.state==='now'?'now':(nn.state==='next'?'next':'done');
+  let nnHTML='';
+  if(nn.state==='now'||nn.state==='next'){
+    nnHTML=`<div class="now-next ${nnCls}">
+      <div class="nn-label">${nn.state==='now'?'🔴 正在进行':'🟡 即将开始'}</div>
+      <div class="nn-course">${nn.course.cn}</div>
+      <div class="nn-meta">${nn.meta}</div>
+      <div class="nn-time">${nn.extra}</div>
+    </div>`;
+  }else{
+    nnHTML=`<div class="now-next ${nnCls}">
+      <div class="nn-label">${nn.state==='weekend'?'🌴 周末':'📋 提醒'}</div>
+      <div class="nn-course" style="font-size:15px">${nn.msg}</div>
+    </div>`;
+  }
+  $nowNext.innerHTML=nnHTML;
+},60000);
 })();
 </script>
 </body>
